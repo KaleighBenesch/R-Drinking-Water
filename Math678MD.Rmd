@@ -1,0 +1,668 @@
+---
+title: "Math678MD"
+author: "Kaleigh Benesch"
+date: '2023-05-31'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyverse)
+```
+
+```{r}
+setwd("~/Desktop/MATH 678")
+
+contaminant <- read.csv(file = "contaminants.csv")
+# Data is at least 6 years old (April 2017). That is when it was uploaded to the site.
+
+head(contaminant)
+
+dim(contaminant)
+# 367,289 observations and 11 predictors (will remove 'href')
+
+names(contaminant)
+```
+
+```{r}
+summary(contaminant)
+
+contaminant <- contaminant[ ,-11] # Removes 'href'
+```
+Data frame with only contaminant, supplier, max, and average
+```{r}
+VarDescribe <- contaminant %>% select(contaminant,average_result,max_result,supplier_name)
+VarDescribe
+```
+
+
+```{r}
+# Have to figure out how to deal with not all locations having a city.
+
+contaminant$locations_served2 <- contaminant$locations_served
+contaminant <- contaminant %>% relocate(locations_served2, .after = locations_served)
+
+contaminant1 <- contaminant %>% separate(locations_served, c('City', 'State'), sep = ", ")
+contaminant1
+```
+
+```{r}
+contaminant1$locations_served2 <- sub(".*? ", "", contaminant1$locations_served2)
+
+
+contaminant1$locations_served2 <- sub(".* ", "", contaminant1$locations_served2)
+# Removes everything before state abbreviations, so that only state is left.
+contaminant1
+
+min(nchar(contaminant1$locations_served2)) # 2 characters
+max(nchar(contaminant1$locations_served2)) # 7 characters
+
+unique(contaminant1$locations_served2) # Observations with 'CITY,' and 'LONDON,'
+
+contaminant1 <- contaminant1[-(364733:364740), ] # 'LONDON,' observations are removed.
+
+unique(contaminant1$locations_served2) # Observations with 'CITY,' left.
+```
+
+```{r}
+CITYbruh <- filter(contaminant1, locations_served2 == "CITY,")
+CITYbruh
+
+sum(contaminant1$locations_served2 == "CITY,", na.rm = TRUE) # 9 observations with "CITY,".
+
+contaminant1 <- contaminant1[-(129901:129909), ] # 'CITY,' observations are removed.
+
+min(nchar(contaminant1$locations_served2)) # 2 characters
+max(nchar(contaminant1$locations_served2)) # 2 characters. So, now we only have state abbreviations in the 'locations_served2' column.
+```
+
+```{r}
+colnames(contaminant1)[10] = "State"
+contaminant1 <- contaminant1[ ,-(9)] # Drop old state column.
+
+min(nchar(contaminant1$City)) # 2 characters (state abbrv that didn't separate initially)
+max(nchar(contaminant1$City)) # 30 characters
+
+contaminant1
+```
+
+
+```{r}
+# Removing the 'Yes' and 'No from columns about if limit was exceeded or not.
+
+contaminant2 <- contaminant1 %>% mutate_at(c("health_limit_exceeded", "legal_limit_exceeded"), str_replace, "No", "") 
+contaminant3 <- contaminant2 %>% mutate_at(c("health_limit_exceeded", "legal_limit_exceeded"), str_replace, "Yes", "")
+
+colnames(contaminant3)[5] = "Health_limit"
+colnames(contaminant3)[6] = "Legal_limit"
+
+contaminant3
+```
+
+```{r}
+contaminant4 <- contaminant3 %>% separate(Legal_limit, c('Legal_limit', 'Unit_measurement'), sep = " ")
+
+contaminant4$average_result <- gsub("\\ .*", "", contaminant4$average_result)
+contaminant4$max_result <- gsub("\\ .*", "", contaminant4$max_result)
+contaminant4$Health_limit <- gsub("\\ .*", "", contaminant4$Health_limit)
+
+contaminant4
+
+# Convert the characters to numeric columns so that we can use > for ifelse() to see if an observation
+# has exceeded the limits.
+contaminant4$average_result <- as.numeric(contaminant4$average_result)
+contaminant4$max_result <- as.numeric(contaminant4$max_result)
+contaminant4$Health_limit <- as.numeric(contaminant4$Health_limit)
+contaminant4$Legal_limit <- as.numeric(contaminant4$Legal_limit)
+
+summary(contaminant4)
+```
+
+NA values for Health and Legal limits.
+```{r}
+sum(is.na(contaminant4$Health_limit)) # 141,052 NAs
+sum(is.na(contaminant4$Legal_limit)) # 29,962 NAs
+```
+Fill in NA values for Legal limits.
+```{r}
+unique(contaminant1$legal_limit_exceeded)
+# "Legal at any level. This is the Federal Limit. State Limits may be lower." causes NAs in this column now.
+```
+
+```{r}
+contaminant4$Legal_limit <- replace(contaminant4$Legal_limit, is.na(contaminant4$Legal_limit), 999999)
+```
+
+Fill in NA values for Health limits.
+```{r}
+unique(contaminant1$health_limit_exceeded)
+# "MCLG (maximum contaminant level goal): A non-enforceable health goal that is set at a level at which no known or anticipated adverse effect on the health of persons occurs and which allows an adequate margin of safety. Source: U.S. Environmental Protection Agency : 0" causes NAs in this column now.
+```
+MCLGs consider only public health and not the limits of detection and treatment technology effectiveness. They sometimes are set at levels which water systems cannot meet because of technological limitations.
+* For microbial contaminants that may present public health risk, EPA sets the MCLG at 0. This is because ingesting one protozoan, virus, or bacterium may cause adverse health effects.
+* For chemical contaminants that are carcinogens, EPA sets the MCLG at 0 if both of these are the case:
+  - there is evidence that a chemical may cause cancer
+  - there is no dose below which the chemical is considered safe.
+* If a chemical is carcinogenic and a safe dose can be determined, EPA sets the MCLG at a level above 0 that is safe.
+```{r}
+contaminant4$Health_limit <- replace(contaminant4$Health_limit, is.na(contaminant4$Health_limit), 0)
+```
+
+Make new binary columns to see when limits are exceeded or not.
+```{r}
+contaminant4$avg_health_exceed01 <- ifelse(contaminant4$average_result > contaminant4$Health_limit, 1, 0)
+contaminant4$max_health_exceed01 <- ifelse(contaminant4$max_result > contaminant4$Health_limit, 1, 0)
+contaminant4$avg_legal_exceed01 <- ifelse(contaminant4$average_result > contaminant4$Legal_limit, 1, 0)
+contaminant4$max_legal_exceed01 <- ifelse(contaminant4$max_result > contaminant4$Legal_limit, 1, 0)
+
+order1 = c('id', 'contaminant', 'Unit_measurement', 'average_result', 'max_result', 'Health_limit', 'Legal_limit', 
+           'avg_health_exceed01', 'max_health_exceed01', 'avg_legal_exceed01', 'max_legal_exceed01',
+           'zipcode', 'City', 'State', 'supplier_name', 'number_of_people_served')
+contaminant4 <- contaminant4[ , order1]
+contaminant4
+```
+
+When some results are not taken.
+```{r}
+sum(is.na(contaminant4$avg_health_exceed01)) # 6,488 NAs
+sum(is.na(contaminant4$max_health_exceed01)) # 2,938 NAs
+sum(is.na(contaminant4$avg_legal_exceed01)) # 6,488 NAs
+sum(is.na(contaminant4$max_legal_exceed01)) # 2,938 NAs
+```
+
+Contaminants and NA values.
+```{r}
+sum(is.na(contaminant4$Unit_measurement))
+
+unique(contaminant4$contaminant[!complete.cases(contaminant4$Unit_measurement)])
+# Only lead returns NA values, but the unit measurement is actually "ppb"
+
+contaminant4$Unit_measurement <- replace(contaminant4$Unit_measurement, is.na(contaminant4$Unit_measurement), "ppb")
+```
+
+
+Export contaminant4
+```{r}
+# write.csv(contaminant4, "contaminant_updated6-7.csv", row.names = FALSE)
+```
+
+
+```{r}
+unique(contaminant4$contaminant) # 315 different contaminants
+```
+
+
+
+EWG Drinking Water Standards Data Extraction
+```{r}
+standards2021 <- read.csv(file = "EWG_DWStandards.csv")
+```
+
+```{r}
+standards2021 <- standards2021 %>% separate(EWG_Standard, c('EWG_standard', 'Unit_measurement'), sep = " ")
+
+standards2021$Federal_Legal_Limit <- gsub("\\ .*", "", standards2021$Federal_Legal_Limit)
+
+head(standards2021)
+```
+
+```{r}
+unique(standards2021$Contaminant) # 99 different contaminants.
+
+standards2021 <- standards2021[-(75), ] # Removes a duplicate contaminant and limit (p-Dichlorobenzene).
+```
+
+```{r}
+colnames(standards2021)[1] = "contaminant"
+colnames(standards2021)[2] = "Legal_limit2021"
+colnames(standards2021)[3] = "Health_limit2021"
+```
+
+```{r}
+summary(standards2021)
+# Change character columns to numeric.
+standards2021$Health_limit2021 <- as.numeric(standards2021$Health_limit2021)
+standards2021$Legal_limit2021 <- as.numeric(standards2021$Legal_limit2021)
+```
+
+```{r}
+# Turn the NA (nonexistent limits in "Legal" to large number for evaluating purposes)
+
+standards2021$Legal_limit2021 <- replace(standards2021$Legal_limit2021, is.na(standards2021$Legal_limit2021), 999999)
+```
+
+Need to drop " (total)" from contaminant4 and standards2021 so that the "contaminant" columns join correctly.
+```{r}
+contaminant4$contaminant <- gsub("\\s*\\([^\\)]+\\)", "", as.character(contaminant4$contaminant))
+standards2021$contaminant <- gsub("\\s*\\([^\\)]+\\)", "", as.character(standards2021$contaminant))
+```
+
+Export standards2021
+```{r}
+#write.csv(standards2021, "EWG2021cleaned.csv", row.names = FALSE)
+```
+
+################################################################################
+Joined data set with both limits and both unit measurements.
+
+```{r}
+colnames(standards2021)[4] = "Unit_measurement2021"
+```
+
+Join standards2021 to contaminant4 according to "contaminant"
+```{r}
+contaminant5 <- merge(contaminant4, standards2021, by = "contaminant", all.x = TRUE)
+
+sum(is.na(contaminant5$Legal_limit2021)) # 75,324 missing observations
+sum(is.na(contaminant5$Health_limit2021)) # 75,324 missing observations
+
+sum(is.na(contaminant5$average_result))
+sum(is.na(contaminant5$max_result))
+```
+
+```{r}
+order2 = c('id', 'contaminant', 'Unit_measurement', 'average_result', 'max_result', 'Health_limit', 'Health_limit2021', 
+           'Legal_limit', 'Legal_limit2021', 'Unit_measurement2021', 'avg_health_exceed01', 'max_health_exceed01',
+           'avg_legal_exceed01', 'max_legal_exceed01', 'zipcode', 'City', 'State', 'supplier_name', 'number_of_people_served')
+contaminant5 <- contaminant5[ , order2]
+```
+
+Convert ppb to ppm
+```{r}
+contaminant5 <- contaminant5 %>%
+  mutate(across(starts_with("Legal_limit"), 
+                ~ if_else(get(str_replace(cur_column(), "Legal_limit", "Unit_measurement")) == "ppb" & !is.na(.), . / 1000, .),
+                .names = "{.col}"))
+
+contaminant5 <- contaminant5 %>%
+  mutate(across(starts_with("Health_limit"), 
+                ~ if_else(get(str_replace(cur_column(), "Health_limit", "Unit_measurement")) == "ppb" & !is.na(.), . / 1000, .),
+                .names = "{.col}"))
+
+contaminant5 <- contaminant5 %>%
+  mutate(across(ends_with("average_result"), 
+                ~ if_else(get(str_replace(cur_column(), "average_result", "Unit_measurement")) == "ppb" & !is.na(.), . / 1000, .),
+                .names = "{.col}"))
+
+contaminant5 <- contaminant5 %>%
+  mutate(across(ends_with("max_result"), 
+                ~ if_else(get(str_replace(cur_column(), "max_result", "Unit_measurement")) == "ppb" & !is.na(.), . / 1000, .),
+                .names = "{.col}"))
+
+contaminant5$Unit_measurement[contaminant5$Unit_measurement == "ppb"] <- "ppm"
+contaminant5$Unit_measurement2021[contaminant5$Unit_measurement2021 == "ppb"] <- "ppm"
+
+contaminant5
+```
+
+Unit measurements with "at" instead of a real unit.
+```{r}
+sum(contaminant5$Unit_measurement == "at", na.rm = TRUE) # 14,270 observations with "at" for unit measurement.
+
+at_units <- filter(contaminant5, Unit_measurement == "at")
+at_units
+
+# Not really important, so we will just turn them to NAs...they just got lost among data cleaning.
+contaminant5$Unit_measurement[contaminant5$Unit_measurement == "at"] = NA
+``` 
+
+Final cleaning, make accidental state abbreviations in the "City" column NAs.
+```{r}
+contaminant5$City <- gsub(nchar(contaminant5$State) == 2, NA, contaminant5$City)
+contaminant5$City <- replace(contaminant5$City, nchar(contaminant5$City) == 2, NA)
+
+min(nchar(contaminant5$City))
+sum(is.na(contaminant5$City)) # 92,337 missing "City" values.
+``` 
+
+
+Export contaminant5 (joined data frame)
+```{r}
+# write.csv(contaminant5, "contaminant_joined6-8.csv", row.names = FALSE)
+```
+
+
+################################################################################
+
+Answering the first proposal question: Are some suppliers of drinking water more likely to exceed legal limits of contaminants than other suppliers?
+
+
+Suppliers and contaminants.
+```{r}
+length(unique(contaminant5$supplier_name)) # 42,668 unique suppliers
+```
+
+```{r}
+supplier <- contaminant5 %>% select('avg_health_exceed01', 'avg_legal_exceed01', 
+                                    'max_health_exceed01', 'max_legal_exceed01', 'supplier_name', 'State', 'contaminant')
+
+# How many times total a limit is not and is exceeded.
+table(supplier$avg_legal_exceed01)
+table(supplier$max_legal_exceed01)
+table(supplier$avg_health_exceed01)
+table(supplier$max_health_exceed01)
+```
+
+```{r}
+supplier_freq <- table(supplier$supplier_name) # Times each supplier occurs.
+head(supplier_freq)
+
+# Turn table into a data frame
+supplier_freq = as.data.frame(supplier_freq)
+head(supplier_freq)
+
+supplier2 <- aggregate(cbind(avg_health_exceed01, max_health_exceed01, avg_legal_exceed01, max_legal_exceed01) ~ supplier_name, supplier, sum, na.rm = FALSE) 
+# Times each supplier average/max sample exceeds health/legal limit.
+```
+
+```{r}
+length(unique(supplier2$supplier_name)) # has 42,566 suppliers
+length(unique(supplier_freq$Var1)) # has all suppliers : 42,668
+
+missing <- supplier_freq %>% filter(!supplier_freq$Var1 %in% supplier2$supplier_name)
+head(missing) # 102 missing suppliers
+
+supplier_freq <- anti_join(supplier_freq, missing)
+
+length(unique(supplier_freq$Var1)) # now they are both the same length
+
+colnames(supplier_freq)[1] = "supplier_name"
+```
+
+```{r}
+supplier3 <- merge(supplier_freq, supplier2, by = "supplier_name", all.x = TRUE)
+head(supplier3)
+
+colnames(supplier3)[2] = "total_samples"
+colnames(supplier3)[3] = "avg_health_exceed"
+colnames(supplier3)[4] = "max_health_exceed"
+colnames(supplier3)[5] = "avg_legal_exceed"
+colnames(supplier3)[6] = "max_legal_exceed"
+```
+
+Make columns for rate of times exceeded.
+```{r}
+supplier3$rate_avg_H_exceed <- (supplier3$avg_health_exceed / supplier3$total_samples)
+supplier3$rate_max_H_exceed <- (supplier3$max_health_exceed / supplier3$total_samples)
+supplier3$rate_avg_L_exceed <- (supplier3$avg_legal_exceed / supplier3$total_samples)
+supplier3$rate_max_L_exceed <- (supplier3$max_legal_exceed / supplier3$total_samples)
+```
+
+** Maybe group certain ratings and create a bar graph of count. **
+```{r}
+supplier4 <- supplier3 %>% 
+  mutate(max_health_grouped = ifelse(rate_max_H_exceed <= 0.25, "Low",
+                                     ifelse(rate_max_H_exceed >= 0.25 & rate_max_H_exceed <= 0.50, "Medium",
+                                            ifelse(rate_max_H_exceed >= 0.50 & rate_max_H_exceed <= 0.75, "High",
+                                                   ifelse(rate_max_H_exceed >= 0.75, "Very High", NA)))))
+
+supplier4 <- supplier4 %>% 
+  mutate(max_legal_grouped = ifelse(rate_max_L_exceed <= 0.25, "Low",
+                                     ifelse(rate_max_L_exceed >= 0.25 & rate_max_L_exceed <= 0.50, "Medium",
+                                            ifelse(rate_max_L_exceed >= 0.50 & rate_max_L_exceed <= 0.75, "High",
+                                                   ifelse(rate_max_L_exceed >= 0.75, "Very High", NA)))))
+
+supplier4
+```
+
+Suppliers who exceed legal limits 100% of the time.
+```{r}
+AlwaysExceed <- filter(supplier4, rate_avg_L_exceed == 1)
+AlwaysExceed
+
+unique(AlwaysExceed$total_samples)
+unique(AlwaysExceed$supplier_name)
+```
+
+
+```{r}
+bar_order = c("Low", "Medium", "High","Very High")
+
+plot1 <- ggplot(data = supplier4) + geom_bar(aes(x = factor(max_health_grouped, bar_order)), 
+                                    color = 'lightblue', fill = 'lightblue') + 
+  labs(title = "Suppliers' Maximum Sample Exceeds Health Limit", 
+       x = "Rate That Suppliers Exceed Limit", 
+       y = "Count")
+
+plot2 <- ggplot(data = supplier4) + geom_bar(aes(x = factor(max_legal_grouped, bar_order)), 
+                                    color = 'lightgreen', fill = 'lightgreen') + 
+  labs(title = "Suppliers' Maximum Sample Exceeds Legal Limit", 
+       x = "Rate That Suppliers Exceed Limit", 
+       y = "Count")
+
+plot(plot1)
+plot(plot2)
+```
+
+Try as histograms instead.
+```{r}
+plot1.2 <- ggplot(data = supplier4) +
+  geom_histogram(mapping = aes(x = rate_max_H_exceed), binwidth = 0.1, color = 'lightblue', fill = 'lightblue') + 
+  labs(title = "Suppliers' Maximum Sample Exceeds Health Limit", 
+       x = "Rate That Suppliers Exceed Limit", 
+       y = "Count")
+
+plot2.2 <- ggplot(data = supplier4) +
+  geom_histogram(mapping = aes(x = rate_max_L_exceed), binwidth = 0.1, color = 'lightgreen', fill = 'lightgreen') + 
+  labs(title = "Suppliers' Maximum Sample Exceeds Legal Limit", 
+       x = "Rate That Suppliers Exceed Limit", 
+       y = "Count")
+
+plot(plot1.2)
+plot(plot2.2)
+```
+
+
+################################################################################
+
+Answering the second proposal question: Are there any correlated contaminants? In other words, if a specific 
+contaminant is present at a certain level, is it likely that another specific contaminant is present?
+
+The most commonly occurring contaminant samples are:
+```{r}
+summary(as.factor(contaminant5$contaminant))
+names(sort(summary(as.factor(contaminant5$contaminant)), decreasing = TRUE)[1:8])
+# "Nitrate", "Total trihalomethanes", "Barium", "Copper", "Chloroform", "Total haloacetic acids", "Bromodichloromethane",
+# "Dibromochloromethane"
+```
+
+Make a more manageable data frame.
+```{r}
+contaminant5.2 <- contaminant5 %>% filter(contaminant == c("Nitrate", "Total trihalomethanes", 
+                                                           "Barium", "Copper", "Chloroform", "Total haloacetic acids",
+                                                           "Bromodichloromethane", "Dibromochloromethane"))
+contaminant5.2 <- contaminant5.2 %>% select(contaminant, State, average_result)
+contaminant5.2
+```
+Go by supplier instead of State.
+```{r}
+contaminant5.21 <- contaminant5 %>% filter(contaminant == c("Nitrate", "Total trihalomethanes", 
+                                                           "Barium", "Copper", "Chloroform", "Total haloacetic acids",
+                                                           "Bromodichloromethane", "Dibromochloromethane"))
+contaminant5.21 <- contaminant5.21 %>% select(contaminant, supplier_name, average_result)
+contaminant5.21
+```
+
+Average result from each State by top 8 most common contaminants.
+```{r}
+contaminant5.2 <- contaminant5.2 %>% 
+  pivot_wider(names_from = contaminant, values_from = average_result, values_fn = mean)
+contaminant5.2
+```
+Average result from each supplier by top 8 most common contaminants.
+```{r}
+contaminant5.21 <- contaminant5.21 %>% 
+  pivot_wider(names_from = contaminant, values_from = average_result, values_fn = mean)
+contaminant5.21
+```
+
+Correlation between contaminants with states?
+```{r}
+library(psych)
+
+corPlot((contaminant5.2[2:9]), cex = 1, cex.axis = 0.8, xlas = 2, main = "Correlation Plot of 8 Most Common Contaminants")
+```
+While there is not strong correlation between any of these top 8 most common contaminants, the 
+most correlated contaminants are "Total haloacetic acids" with "Total trihalomethanes". These two
+have a positive correlation coefficient of 0.67 and might be more likely to be found together in similar
+amounts when testing water supplies.
+
+Correlation between contaminants with suppliers?
+```{r}
+corPlot((contaminant5.21[2:9]), cex = 1, cex.axis = 0.8, xlas = 2, main = "Correlation Plot of 8 Most Common Contaminants")
+```
+
+```{r}
+summary(contaminant5.21)
+sum(is.na(contaminant5.21))
+```
+
+
+Use a model that predicts amounts of a certain contaminant based on the others.
+```{r}
+# set.seed(22)
+# 
+# train = sample(1:nrow(contaminant5.21), 0.7*nrow(contaminant5.21))
+# contaminant5.21.train = contaminant5.21[train, ]
+# contaminant5.21.test = contaminant5.21[-train, ]
+```
+
+Make a liner model
+```{r}
+# lm.fit1 = lm(Barium ~ . - supplier_name, data = contaminant5.21.train)
+# summary(lm.fit1)
+```
+
+
+################################################################################
+
+Answering the third proposal question: Are some water contaminants more common in western states vs eastern states? 
+Northern vs southern?
+
+* Should I make the scales such that the top limit is the legal limit?
+
+Install package for mapping.
+```{r}
+library(usmap)
+```
+
+Since there are over 300 contaminants, we will look at the top 5 most common contaminants in the data set.
+We will create a map of the U.S. that shows the average amounts of each contaminant by state. The states
+with higher average amounts of each contaminant will have a darker shade while lesser amounts will be
+represented by light shades or white. States without a recorded average will be filled in gray. There are no
+observations from Kansas, Mississippi, or Georgia.
+```{r}
+names(sort(summary(as.factor(contaminant5$contaminant)), decreasing = TRUE)[1:5])
+# Nitrate, Total trihalomethanes, Barium, Copper, and Chloroform are the 5 most frequently appearing contaminants.
+```
+
+Nitrate
+```{r}
+Nitrate <- contaminant5 %>% filter(contaminant == "Nitrate")
+Nitrate <- data.frame(state = Nitrate$State, 
+                             average_result = Nitrate$average_result, contaminant = Nitrate$contaminant)
+
+NitrateAvg <- aggregate(average_result ~ state, Nitrate, mean)
+
+max(NitrateAvg$average_result) # 5.58
+
+plot_usmap(data = NitrateAvg, values = "average_result", labels = TRUE) + 
+  scale_fill_continuous(low = "white", high = "darkred", name = "average_result", 
+                        label = scales::comma, limits = c(0, 6)) + 
+  labs(title = "United States", subtitle = "Average Results of Nitrate (ppm) by State") +
+  theme(legend.position = "right")
+```
+
+Total trihalomethanes
+```{r}
+Total_trihalomethanes <- contaminant5 %>% filter(contaminant == "Total trihalomethanes")
+Total_trihalomethanes <- data.frame(state = Total_trihalomethanes$State, 
+                             average_result = Total_trihalomethanes$average_result, 
+                             contaminant = Total_trihalomethanes$contaminant)
+
+Total_trihalomethanesAvg <- aggregate(average_result ~ state, Total_trihalomethanes, mean)
+
+max(Total_trihalomethanesAvg$average_result) # 0.055
+
+plot_usmap(data = Total_trihalomethanesAvg, values = "average_result", labels = TRUE) + 
+  scale_fill_continuous(low = "white", high = "darkgreen", name = "average_result", 
+                        label = scales::comma, limits = c(0, 0.06)) + 
+  labs(title = "United States", subtitle = "Average Results of Total Trihalomethanes (ppm) by State") +
+  theme(legend.position = "right")
+```
+
+Barium
+```{r}
+Barium <- contaminant5 %>% filter(contaminant == "Barium")
+Barium <- data.frame(state = Barium$State, 
+                             average_result = Barium$average_result, 
+                             contaminant = Barium$contaminant)
+
+BariumAvg <- aggregate(average_result ~ state, Barium, mean)
+
+max(BariumAvg$average_result) # 0.298
+
+plot_usmap(data = BariumAvg, values = "average_result", labels = TRUE) + 
+  scale_fill_continuous(low = "white", high = "darkblue", name = "average_result", 
+                        label = scales::comma, limits = c(0, 0.3)) + 
+  labs(title = "United States", subtitle = "Average Results of Barium (ppm) by State") +
+  theme(legend.position = "right")
+```
+
+Copper
+```{r}
+Copper <- contaminant5 %>% filter(contaminant == "Copper")
+Copper <- data.frame(state = Copper$State, 
+                             average_result = Copper$average_result, 
+                             contaminant = Copper$contaminant)
+
+CopperAvg <- aggregate(average_result ~ state, Copper, mean)
+
+max(CopperAvg$average_result) # 0.353
+
+plot_usmap(data = CopperAvg, values = "average_result", labels = TRUE) + 
+  scale_fill_continuous(low = "white", high = "darkorange", name = "average_result", 
+                        label = scales::comma, limits = c(0, 0.37)) + 
+  labs(title = "United States", subtitle = "Average Results of Copper (ppm) by State") +
+  theme(legend.position = "right")
+```
+
+Chloroform
+```{r}
+Chloroform <- contaminant5 %>% filter(contaminant == "Chloroform")
+Chloroform <- data.frame(state = Chloroform$State, 
+                             average_result = Chloroform$average_result, 
+                             contaminant = Chloroform$contaminant)
+
+ChloroformAvg <- aggregate(average_result ~ state, Chloroform, mean)
+
+max(ChloroformAvg$average_result) # 0.029
+
+plot_usmap(data = ChloroformAvg, values = "average_result", labels = TRUE) + 
+  scale_fill_continuous(low = "white", high = "gold", name = "average_result", 
+                        label = scales::comma, limits = c(0, 0.03)) + 
+  labs(title = "United States", subtitle = "Average Results of Chloroform (ppm) by State") +
+  theme(legend.position = "right")
+```
+
+After mapping the level of these 5 contaminants, the only one that seems to show any pattern is
+Copper. According to the map results in orange, Copper mostly appears in higher amounts in 
+northeastern parts of the United States and in smaller amounts in west/southwestern states.
+
+
+Export contaminant5 (joined data frame)
+First deadline.
+```{r}
+# write.csv(contaminant5, "contaminant_6-21.csv", row.names = FALSE)
+```
+
+------------------------ FIRST DEADLINE 6/21/2023 ------------------------ 
+
+
+
+
+
+
+ 
